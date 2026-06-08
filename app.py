@@ -192,13 +192,6 @@ def get_clients_worksheet():
         return None
     try:
         ws = spreadsheet.worksheet(CLIENTS_SHEET_NAME)
-        # Add any missing columns without disrupting existing data
-        existing_headers = ws.row_values(1)
-        for i, h in enumerate(CLIENTS_HEADERS):
-            if h not in existing_headers:
-                col_idx = len(existing_headers) + 1
-                ws.update_cell(1, col_idx, h)
-                existing_headers.append(h)
         return ws
     except gspread.exceptions.WorksheetNotFound:
         ws = spreadsheet.add_worksheet(title=CLIENTS_SHEET_NAME, rows=200, cols=len(CLIENTS_HEADERS))
@@ -498,8 +491,11 @@ else:
     st.markdown("<div class='brand-divider'></div>", unsafe_allow_html=True)
 
     if task_sheet is not None and invoice_sheet is not None and drive_service is not None:
-        all_tasks = task_sheet.get_all_records()
+        # ---- Load ALL sheet data ONCE here — no tab should re-fetch independently ----
+        all_tasks    = task_sheet.get_all_records()
         all_invoices = invoice_sheet.get_all_records()
+        pipeline_records = get_pipeline_records()
+        comm_records     = get_comm_log_records()
         today = date.today()
 
         # =====================================
@@ -617,7 +613,6 @@ else:
                     unsafe_allow_html=True
                 )
             with col7:
-                pipeline_records = get_pipeline_records()
                 active_pipeline = [
                     p for p in pipeline_records
                     if str(p.get("Stage", "")).strip().lower() not in ("", "closed lost")
@@ -1086,8 +1081,6 @@ else:
                 st.markdown("#### Activity Log")
                 st.markdown("<br>", unsafe_allow_html=True)
 
-                comm_records = get_comm_log_records()
-
                 # Filters
                 al_col1, al_col2 = st.columns([2, 2])
                 with al_col1:
@@ -1216,7 +1209,6 @@ else:
 
                 st.markdown("<br>", unsafe_allow_html=True)
 
-                pipeline_records = get_pipeline_records()
                 stage_order = ["New Lead", "Proposal Sent", "Proposal Accepted", "Onboarding", "Closed Lost"]
                 stage_badge = {
                     "New Lead": "stage-new",
