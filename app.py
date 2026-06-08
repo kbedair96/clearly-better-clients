@@ -77,7 +77,6 @@ st.markdown("""
 GOOGLE_SHEET_NAME = "FirmLink_DB"
 SHARED_DRIVE_ID = "0AFQkhoAnS2U-Uk9PVA"
 MAIN_DRIVE_FOLDER_ID = "0AFQkhoAnS2U-Uk9PVA"
-CREDS_FILE = "google_creds.json"
 CLIENTS_SHEET_NAME = "Clients"
 USERS_SHEET_NAME = "Users"
 CLIENTS_HEADERS = ["Client Name", "Contact Name", "Email", "Phone", "Date Added"]
@@ -97,7 +96,7 @@ def is_admin_role(role):
 @st.cache_resource
 def get_google_services():
     try:
-        creds = ServiceAccountCredentials.from_json_keyfile_name(CREDS_FILE, SCOPES)
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(dict(st.secrets["gcp_service_account"]), SCOPES)
         spreadsheet = gspread.authorize(creds).open(GOOGLE_SHEET_NAME)
         task_sheet = spreadsheet.sheet1
         invoice_sheet = spreadsheet.worksheet("Invoices")
