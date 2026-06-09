@@ -772,9 +772,35 @@ if not st.session_state.authenticated:
 else:
     admin = is_admin(st.session_state.user_role)
 
+    # ─────────────────────────────────────────────────────────
+    # CACHED DATA LOADER  — prevents Google Sheets 429 quota
+    # All 10 sheets loaded in one cache entry; TTL = 30 seconds.
+    # Call load_sheet_data.clear() anywhere a write needs
+    # to force an immediate refresh on the next rerun.
+    # ─────────────────────────────────────────────────────────
+    @st.cache_data(ttl=60, show_spinner=False)
+    def load_sheet_data(_cache_key):
+        """_cache_key is a dummy hashable arg so Streamlit can key the cache.
+        Reads are retried with backoff to stay under the Sheets quota."""
+        return {
+            "tasks":     _safe_read(svc["tasks"].get_all_records),
+            "invoices":  _safe_read(svc["invoices"].get_all_records),
+            "clients":   _safe_read(svc["clients"].get_all_records),
+            "pipeline":  _safe_read(svc["pipeline"].get_all_records),
+            "comm_log":  _safe_read(svc["comm_log"].get_all_records),
+            "timelog":   _safe_read(svc["timelog"].get_all_records),
+            "recurring": _safe_read(svc["recurring"].get_all_records),
+            "close":     _safe_read(svc["close"].get_all_records),
+            "doc_req":   _safe_read(svc["doc_req"].get_all_records),
+            "messages":  _safe_read(svc["messages"].get_all_records),
+        }
+
+    # Stable cache key so the cache survives service-resource recreation
+    _raw = load_sheet_data("sheet_data_v1")
+
     # ── Client list ──
     BASE_CLIENTS = ["Acme Corp", "Baker Street Cafe"]
-    _cli_recs    = _safe_read(svc["clients"].get_all_records) if svc else []
+    _cli_recs    = load_sheet_data("sheet_data_v1").get("clients", []) if svc else []
     _cli_names   = [str(r.get("Client Name","")).strip() for r in _cli_recs if str(r.get("Client Name","")).strip()]
     CLIENT_LIST  = list(dict.fromkeys(BASE_CLIENTS + _cli_names))
     CLI_LOOKUP   = {str(r.get("Client Name","")).strip(): r for r in _cli_recs}
@@ -833,31 +859,6 @@ else:
         st.info("Connecting to portal services…")
         st.stop()
 
-    # ─────────────────────────────────────────────────────────
-    # CACHED DATA LOADER  — prevents Google Sheets 429 quota
-    # All 10 sheets loaded in one cache entry; TTL = 30 seconds.
-    # Call load_sheet_data.clear() anywhere a write needs
-    # to force an immediate refresh on the next rerun.
-    # ─────────────────────────────────────────────────────────
-    @st.cache_data(ttl=60, show_spinner=False)
-    def load_sheet_data(_cache_key):
-        """_cache_key is a dummy hashable arg so Streamlit can key the cache.
-        Reads are retried with backoff to stay under the Sheets quota."""
-        return {
-            "tasks":     _safe_read(svc["tasks"].get_all_records),
-            "invoices":  _safe_read(svc["invoices"].get_all_records),
-            "clients":   _safe_read(svc["clients"].get_all_records),
-            "pipeline":  _safe_read(svc["pipeline"].get_all_records),
-            "comm_log":  _safe_read(svc["comm_log"].get_all_records),
-            "timelog":   _safe_read(svc["timelog"].get_all_records),
-            "recurring": _safe_read(svc["recurring"].get_all_records),
-            "close":     _safe_read(svc["close"].get_all_records),
-            "doc_req":   _safe_read(svc["doc_req"].get_all_records),
-            "messages":  _safe_read(svc["messages"].get_all_records),
-        }
-
-    # Stable cache key so the cache survives service-resource recreation
-    _raw = load_sheet_data("sheet_data_v1")
 
     # ─────────────────────────────────────────────────────────
     # UNPACK DATA
