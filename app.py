@@ -325,6 +325,24 @@ def get_google_services():
 
 svc = get_google_services()
 
+# ═══════════════════════════════════════════════════════════════
+# GSPREAD RETRY WRAPPER — absorbs transient 429 rate-limit errors
+# ═══════════════════════════════════════════════════════════════
+import time as _time
+
+def _safe_read(fn, *args, retries=4, base_delay=1.0, **kwargs):
+    """Call a gspread read with exponential backoff on 429 quota errors."""
+    for attempt in range(retries):
+        try:
+            return fn(*args, **kwargs)
+        except gspread.exceptions.APIError as e:
+            code = getattr(getattr(e, "response", None), "status_code", None)
+            if code == 429 and attempt < retries - 1:
+                _time.sleep(base_delay * (2 ** attempt))
+                continue
+            raise
+
+
 
 # ═══════════════════════════════════════════════════════════════
 # AI HELPER  (requires ANTHROPIC_API_KEY in Streamlit secrets)
@@ -529,7 +547,7 @@ def update_client_col(client_name, col_name, value):
     col = CLI_COL.get(col_name)
     if col is None: return
     try:
-        recs = svc["clients"].get_all_records()
+        recs = _safe_read(svc["clients"].get_all_records)
         for i, r in enumerate(recs):
             if str(r.get("Client Name", "")).strip() == client_name.strip():
                 svc["clients"].update_cell(i + 2, col, value)
@@ -556,7 +574,7 @@ def add_pipeline_lead(lead_name, contact, email, service_interest, stage, est_va
 def update_pipeline_stage(lead_name, new_stage):
     if svc is None: return
     try:
-        recs = svc["pipeline"].get_all_records()
+        recs = _safe_read(svc["pipeline"].get_all_records)
         for i, r in enumerate(recs):
             if str(r.get("Lead Name", "")).strip() == lead_name.strip():
                 svc["pipeline"].update_cell(i + 2, 5, new_stage)
@@ -616,7 +634,7 @@ def get_firm_setting(key, default=""):
     """Read a single setting from FirmSettings sheet."""
     if svc is None: return default
     try:
-        recs = svc["settings"].get_all_records()
+        recs = _safe_read(svc["settings"].get_all_records)
         for r in recs:
             if str(r.get("Setting","")).strip() == key:
                 return str(r.get("Value","")).strip() or default
@@ -628,7 +646,7 @@ def set_firm_setting(key, value):
     """Write/update a setting in FirmSettings sheet."""
     if svc is None: return
     try:
-        recs = svc["settings"].get_all_records()
+        recs = _safe_read(svc["settings"].get_all_records)
         for i, r in enumerate(recs):
             if str(r.get("Setting","")).strip() == key:
                 svc["settings"].update_cell(i + 2, 2, value)
@@ -652,7 +670,7 @@ def update_user_display_name(username, display_name):
     """Update the display name for a user."""
     if svc is None: return
     try:
-        recs = svc["users"].get_all_records()
+        recs = _safe_read(svc["users"].get_all_records)
         for i, r in enumerate(recs):
             if str(r.get("username","")).strip() == username:
                 svc["users"].update_cell(i + 2, 5, display_name)
@@ -733,7 +751,7 @@ if not st.session_state.authenticated:
             p   = st.text_input("Password", type="password").strip()
             btn = st.form_submit_button("Sign In")
         if btn:
-            users = svc["users"].get_all_records() if svc else []
+            users = _safe_read(svc["users"].get_all_records) if svc else []
             match = next((r for r in users if str(r.get("username","")).strip()==u and str(r.get("password","")).strip()==p and u), None)
             if match:
                 st.session_state.update({
@@ -756,7 +774,7 @@ else:
 
     # ── Client list ──
     BASE_CLIENTS = ["Acme Corp", "Baker Street Cafe"]
-    _cli_recs    = svc["clients"].get_all_records() if svc else []
+    _cli_recs    = _safe_read(svc["clients"].get_all_records) if svc else []
     _cli_names   = [str(r.get("Client Name","")).strip() for r in _cli_recs if str(r.get("Client Name","")).strip()]
     CLIENT_LIST  = list(dict.fromkeys(BASE_CLIENTS + _cli_names))
     CLI_LOOKUP   = {str(r.get("Client Name","")).strip(): r for r in _cli_recs}
@@ -821,24 +839,25 @@ else:
     # Call load_sheet_data.clear() anywhere a write needs
     # to force an immediate refresh on the next rerun.
     # ─────────────────────────────────────────────────────────
-    @st.cache_data(ttl=30, show_spinner=False)
-    def load_sheet_data(_svc_id):
-        """_svc_id is a dummy hashable arg so Streamlit can key the cache."""
+    @st.cache_data(ttl=60, show_spinner=False)
+    def load_sheet_data(_cache_key):
+        """_cache_key is a dummy hashable arg so Streamlit can key the cache.
+        Reads are retried with backoff to stay under the Sheets quota."""
         return {
-            "tasks":     svc["tasks"].get_all_records(),
-            "invoices":  svc["invoices"].get_all_records(),
-            "clients":   svc["clients"].get_all_records(),
-            "pipeline":  svc["pipeline"].get_all_records(),
-            "comm_log":  svc["comm_log"].get_all_records(),
-            "timelog":   svc["timelog"].get_all_records(),
-            "recurring": svc["recurring"].get_all_records(),
-            "close":     svc["close"].get_all_records(),
-            "doc_req":   svc["doc_req"].get_all_records(),
-            "messages":  svc["messages"].get_all_records(),
+            "tasks":     _safe_read(svc["tasks"].get_all_records),
+            "invoices":  _safe_read(svc["invoices"].get_all_records),
+            "clients":   _safe_read(svc["clients"].get_all_records),
+            "pipeline":  _safe_read(svc["pipeline"].get_all_records),
+            "comm_log":  _safe_read(svc["comm_log"].get_all_records),
+            "timelog":   _safe_read(svc["timelog"].get_all_records),
+            "recurring": _safe_read(svc["recurring"].get_all_records),
+            "close":     _safe_read(svc["close"].get_all_records),
+            "doc_req":   _safe_read(svc["doc_req"].get_all_records),
+            "messages":  _safe_read(svc["messages"].get_all_records),
         }
 
-    # Use id(svc) so the cache key ties to this specific service instance
-    _raw = load_sheet_data(id(svc))
+    # Stable cache key so the cache survives service-resource recreation
+    _raw = load_sheet_data("sheet_data_v1")
 
     # ─────────────────────────────────────────────────────────
     # UNPACK DATA
