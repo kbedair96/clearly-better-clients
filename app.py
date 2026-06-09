@@ -455,6 +455,14 @@ def compute_health(client, all_tasks, all_invoices, all_doc_req, cli_lookup, tod
 # ═══════════════════════════════════════════════════════════════
 # UTILITY
 # ═══════════════════════════════════════════════════════════════
+def _clear_data_cache():
+    """Invalidate the sheet data cache. Called by every write helper."""
+    try:
+        load_sheet_data.clear()
+    except Exception:
+        pass  # Safe no-op if called before load_sheet_data is defined
+
+
 def _date_before(date_str, ref_date):
     try:
         return datetime.strptime(str(date_str).strip(), "%Y-%m-%d").date() < ref_date
@@ -479,29 +487,41 @@ def profile_completeness(rec):
 
 # ═══════════════════════════════════════════════════════════════
 # DATA WRITE HELPERS
+# Each one calls _clear_data_cache() so the next page load
+# fetches fresh data instead of serving stale cached results.
 # ═══════════════════════════════════════════════════════════════
 def add_task(client, task_name, status, due_date):
     if svc and task_name and task_name.strip():
         svc["tasks"].append_row([client, task_name.strip(), status, str(due_date)])
+        _clear_data_cache()
 
 def update_task_status(row_num, new_status):
-    if svc: svc["tasks"].update_cell(row_num, 3, new_status)
+    if svc:
+        svc["tasks"].update_cell(row_num, 3, new_status)
+        _clear_data_cache()
 
 def delete_task_row(row_num):
-    if svc: svc["tasks"].delete_rows(row_num)
+    if svc:
+        svc["tasks"].delete_rows(row_num)
+        _clear_data_cache()
 
 def add_invoice(client, inv_num, amount, due_date, pay_link):
-    if svc: svc["invoices"].append_row([client, inv_num, amount, str(due_date), pay_link, "Unpaid"])
+    if svc:
+        svc["invoices"].append_row([client, inv_num, amount, str(due_date), pay_link, "Unpaid"])
+        _clear_data_cache()
 
 def mark_invoice_paid(row_num):
-    if svc: svc["invoices"].update_cell(row_num, 6, "Paid")
+    if svc:
+        svc["invoices"].update_cell(row_num, 6, "Paid")
+        _clear_data_cache()
 
 def add_client(name, contact, email, phone, service_tier, status,
                monthly_rate, contract_signed, start_date, referral):
     if svc is None: return False
     today_str = date.today().strftime("%Y-%m-%d")
-    svc["clients"].append_row([name,contact,email,phone,today_str,service_tier,status,
-                                monthly_rate,contract_signed,str(start_date),referral,today_str,""])
+    svc["clients"].append_row([name, contact, email, phone, today_str, service_tier, status,
+                                monthly_rate, contract_signed, str(start_date), referral, today_str, ""])
+    _clear_data_cache()
     return True
 
 def update_client_col(client_name, col_name, value):
@@ -511,8 +531,9 @@ def update_client_col(client_name, col_name, value):
     try:
         recs = svc["clients"].get_all_records()
         for i, r in enumerate(recs):
-            if str(r.get("Client Name","")).strip() == client_name.strip():
+            if str(r.get("Client Name", "")).strip() == client_name.strip():
                 svc["clients"].update_cell(i + 2, col, value)
+                _clear_data_cache()
                 return
     except Exception:
         pass
@@ -522,11 +543,14 @@ def add_comm_log(client, entry_type, summary, logged_by="Firm"):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
     svc["comm_log"].append_row([ts, client, entry_type, summary, logged_by])
     update_client_col(client, "Last Contacted", date.today().strftime("%Y-%m-%d"))
+    _clear_data_cache()
 
 def add_pipeline_lead(lead_name, contact, email, service_interest, stage, est_value, follow_up, notes):
     if svc is None: return False
     today_str = date.today().strftime("%Y-%m-%d")
-    svc["pipeline"].append_row([lead_name,contact,email,service_interest,stage,est_value,str(follow_up),notes,today_str])
+    svc["pipeline"].append_row([lead_name, contact, email, service_interest, stage,
+                                 est_value, str(follow_up), notes, today_str])
+    _clear_data_cache()
     return True
 
 def update_pipeline_stage(lead_name, new_stage):
@@ -534,40 +558,57 @@ def update_pipeline_stage(lead_name, new_stage):
     try:
         recs = svc["pipeline"].get_all_records()
         for i, r in enumerate(recs):
-            if str(r.get("Lead Name","")).strip() == lead_name.strip():
+            if str(r.get("Lead Name", "")).strip() == lead_name.strip():
                 svc["pipeline"].update_cell(i + 2, 5, new_stage)
+                _clear_data_cache()
                 return
     except Exception:
         pass
 
 def add_time_entry(client, service, hours, notes, logged_by):
-    if svc: svc["timelog"].append_row([date.today().strftime("%Y-%m-%d"), client, service, hours, notes, logged_by])
+    if svc:
+        svc["timelog"].append_row([date.today().strftime("%Y-%m-%d"), client, service, hours, notes, logged_by])
+        _clear_data_cache()
 
 def add_doc_request(client, req_name, category, description, due_date):
     if svc is None: return
     req_id    = datetime.now().strftime("REQ-%Y%m%d-%H%M%S")
     today_str = date.today().strftime("%Y-%m-%d")
-    svc["doc_req"].append_row([req_id,client,req_name,category,description,str(due_date),"Pending","","",today_str])
+    svc["doc_req"].append_row([req_id, client, req_name, category, description,
+                                str(due_date), "Pending", "", "", today_str])
+    _clear_data_cache()
 
 def update_doc_request(row_num, new_status, drive_file_id=""):
     if svc is None: return
     uploaded = date.today().strftime("%Y-%m-%d") if drive_file_id else ""
     svc["doc_req"].update(f"G{row_num}:I{row_num}", [[new_status, drive_file_id, uploaded]])
+    _clear_data_cache()
 
 def send_message(client, sender_type, sender_name, message):
-    if svc: svc["messages"].append_row([datetime.now().strftime("%Y-%m-%d %H:%M"), client, sender_type, sender_name, message])
+    if svc:
+        svc["messages"].append_row([datetime.now().strftime("%Y-%m-%d %H:%M"),
+                                    client, sender_type, sender_name, message])
+        _clear_data_cache()
 
 def add_recurring(name, client, template, frequency, day):
-    if svc: svc["recurring"].append_row([name, client, template, frequency, str(day), "", "Yes"])
+    if svc:
+        svc["recurring"].append_row([name, client, template, frequency, str(day), "", "Yes"])
+        _clear_data_cache()
 
 def update_recurring_last_run(row_num, today_str):
-    if svc: svc["recurring"].update_cell(row_num, 6, today_str)
+    if svc:
+        svc["recurring"].update_cell(row_num, 6, today_str)
+        _clear_data_cache()
 
 def add_close_phase(month, client, phase, status="Pending", notes=""):
-    if svc: svc["close"].append_row([month, client, phase, status, notes, ""])
+    if svc:
+        svc["close"].append_row([month, client, phase, status, notes, ""])
+        _clear_data_cache()
 
 def update_close_row(row_num, status, notes, completed_date=""):
-    if svc: svc["close"].update(f"D{row_num}:F{row_num}", [[status, notes, completed_date]])
+    if svc:
+        svc["close"].update(f"D{row_num}:F{row_num}", [[status, notes, completed_date]])
+        _clear_data_cache()
 
 
 # ── Firm Settings ──
@@ -775,18 +816,51 @@ else:
         st.stop()
 
     # ─────────────────────────────────────────────────────────
-    # LOAD ALL DATA ONCE
+    # CACHED DATA LOADER  — prevents Google Sheets 429 quota
+    # All 10 sheets loaded in one cache entry; TTL = 30 seconds.
+    # Call load_sheet_data.clear() anywhere a write needs
+    # to force an immediate refresh on the next rerun.
+    # ─────────────────────────────────────────────────────────
+    @st.cache_data(ttl=30, show_spinner=False)
+    def load_sheet_data(_svc_id):
+        """_svc_id is a dummy hashable arg so Streamlit can key the cache."""
+        return {
+            "tasks":     svc["tasks"].get_all_records(),
+            "invoices":  svc["invoices"].get_all_records(),
+            "clients":   svc["clients"].get_all_records(),
+            "pipeline":  svc["pipeline"].get_all_records(),
+            "comm_log":  svc["comm_log"].get_all_records(),
+            "timelog":   svc["timelog"].get_all_records(),
+            "recurring": svc["recurring"].get_all_records(),
+            "close":     svc["close"].get_all_records(),
+            "doc_req":   svc["doc_req"].get_all_records(),
+            "messages":  svc["messages"].get_all_records(),
+        }
+
+    # Use id(svc) so the cache key ties to this specific service instance
+    _raw = load_sheet_data(id(svc))
+
+    # ─────────────────────────────────────────────────────────
+    # UNPACK DATA
     # ─────────────────────────────────────────────────────────
     today        = date.today()
-    all_tasks    = svc["tasks"].get_all_records()
-    all_invoices = svc["invoices"].get_all_records()
-    all_pipeline = svc["pipeline"].get_all_records()
-    all_comm     = svc["comm_log"].get_all_records()
-    all_timelog  = svc["timelog"].get_all_records()
-    all_recurring= [dict(r, _row=i+2) for i, r in enumerate(svc["recurring"].get_all_records())]
-    all_close    = [dict(r, _row=i+2) for i, r in enumerate(svc["close"].get_all_records())]
-    all_doc_req  = [dict(r, _row=i+2) for i, r in enumerate(svc["doc_req"].get_all_records())]
-    all_messages = [dict(r, _row=i+2) for i, r in enumerate(svc["messages"].get_all_records())]
+    all_tasks    = _raw.get("tasks", [])
+    all_invoices = _raw.get("invoices", [])
+    _cli_recs2   = _raw.get("clients", [])   # merged with _cli_recs below
+    all_pipeline = _raw.get("pipeline", [])
+    all_comm     = _raw.get("comm_log", [])
+    all_timelog  = _raw.get("timelog", [])
+    all_recurring= [dict(r, _row=i+2) for i, r in enumerate(_raw.get("recurring", []))]
+    all_close    = [dict(r, _row=i+2) for i, r in enumerate(_raw.get("close", []))]
+    all_doc_req  = [dict(r, _row=i+2) for i, r in enumerate(_raw.get("doc_req", []))]
+    all_messages = [dict(r, _row=i+2) for i, r in enumerate(_raw.get("messages", []))]
+
+    # Merge cached clients into _cli_recs (the version used for CLIENT_LIST above)
+    if _cli_recs2:
+        _cli_recs  = _cli_recs2
+        CLI_LOOKUP = {str(r.get("Client Name","")).strip(): r for r in _cli_recs}
+        _cli_names = [str(r.get("Client Name","")).strip() for r in _cli_recs if str(r.get("Client Name","")).strip()]
+        CLIENT_LIST= list(dict.fromkeys(BASE_CLIENTS + _cli_names))
 
     # ── Filter out blank/malformed rows ──
     all_tasks    = [t for t in all_tasks if str(t.get("client","")).strip() or str(t.get("task","")).strip()]
@@ -1323,13 +1397,15 @@ else:
                     st.success(f"Logged {t_hours}h for {t_client}.")
                     st.rerun()
 
+            # ── Compute cli_sum ALWAYS (needed by capacity chart below) ──
+            mtd     = [t for t in all_timelog if str(t.get("Date","")).startswith(this_month)]
+            cli_sum = defaultdict(float)
+            for t in mtd:
+                try: cli_sum[str(t.get("Client",""))] += float(str(t.get("Hours",0)) or 0)
+                except Exception: pass
+
             if all_timelog:
                 st.markdown("<br>**Hours by Client — This Month**")
-                mtd = [t for t in all_timelog if str(t.get("Date","")).startswith(this_month)]
-                cli_sum = defaultdict(float)
-                for t in mtd:
-                    try: cli_sum[str(t.get("Client",""))] += float(str(t.get("Hours",0)) or 0)
-                    except Exception: pass
                 if cli_sum:
                     df_cli = pd.DataFrame([{"Client": k, "Hours": round(v,2)} for k,v in sorted(cli_sum.items(), key=lambda x:-x[1])])
                     st.dataframe(df_cli, use_container_width=True, hide_index=True)
