@@ -348,7 +348,7 @@ def ai_complete(prompt, system_prompt=None, max_tokens=1500):
                 "content-type": "application/json",
             },
             json={
-                "model": "claude-sonnet-4-20250514",
+                "model": "claude-haiku-4-5-20251001",
                 "max_tokens": max_tokens,
                 "system": sys_msg,
                 "messages": [{"role": "user", "content": prompt}],
