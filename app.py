@@ -196,7 +196,9 @@ SH_RECURRING = "RecurringTasks"
 SH_CLOSE     = "MonthClose"
 
 CLIENTS_HEADERS   = ["Client Name","Contact Name","Email","Phone","Date Added","Service Tier","Client Status","Monthly Rate","Contract Signed","Engagement Start","Referral Source","Last Contacted","Internal Notes"]
-USERS_HEADERS     = ["username","password","role","client_association"]
+USERS_HEADERS     = ["username","password","role","client_association","display_name"]
+SH_SETTINGS       = "FirmSettings"
+SETTINGS_HEADERS  = ["Setting","Value"]
 COMM_LOG_HEADERS  = ["Date","Client","Type","Summary","Logged By"]
 PIPELINE_HEADERS  = ["Lead Name","Contact","Email","Service Interest","Stage","Est Monthly Value","Follow Up Date","Notes","Date Added"]
 TIMELOG_HEADERS   = ["Date","Client","Service","Hours","Notes","Logged By"]
@@ -313,6 +315,7 @@ def get_google_services():
             "messages":  _ws(SH_MESSAGES, MESSAGES_HEADERS),
             "recurring": _ws(SH_RECURRING,RECURRING_HEADERS),
             "close":     _ws(SH_CLOSE,    CLOSE_HEADERS),
+            "settings":  _ws(SH_SETTINGS, SETTINGS_HEADERS),
             "drive":     build("drive","v3",credentials=creds),
         }
     except Exception as e:
@@ -466,6 +469,14 @@ def _fmt_money(val_str):
         return 0.0
 
 
+def profile_completeness(rec):
+    """Return (pct 0-100, filled_count, total_count) for a client record."""
+    fields = ["Contact Name","Email","Phone","Service Tier","Monthly Rate","Contract Signed","Engagement Start","Referral Source"]
+    filled = sum(1 for f in fields if str(rec.get(f,"")).strip())
+    pct    = int(filled / len(fields) * 100)
+    return pct, filled, len(fields)
+
+
 # ═══════════════════════════════════════════════════════════════
 # DATA WRITE HELPERS
 # ═══════════════════════════════════════════════════════════════
@@ -559,6 +570,56 @@ def update_close_row(row_num, status, notes, completed_date=""):
     if svc: svc["close"].update(f"D{row_num}:F{row_num}", [[status, notes, completed_date]])
 
 
+# ── Firm Settings ──
+def get_firm_setting(key, default=""):
+    """Read a single setting from FirmSettings sheet."""
+    if svc is None: return default
+    try:
+        recs = svc["settings"].get_all_records()
+        for r in recs:
+            if str(r.get("Setting","")).strip() == key:
+                return str(r.get("Value","")).strip() or default
+    except Exception:
+        pass
+    return default
+
+def set_firm_setting(key, value):
+    """Write/update a setting in FirmSettings sheet."""
+    if svc is None: return
+    try:
+        recs = svc["settings"].get_all_records()
+        for i, r in enumerate(recs):
+            if str(r.get("Setting","")).strip() == key:
+                svc["settings"].update_cell(i + 2, 2, value)
+                return
+        svc["settings"].append_row([key, value])
+    except Exception:
+        pass
+
+
+# ── Portal Users ──
+def add_portal_user(username, password, role, client_assoc, display_name=""):
+    """Add a new user to the Users sheet."""
+    if svc is None: return False
+    try:
+        svc["users"].append_row([username, password, role, client_assoc, display_name])
+        return True
+    except Exception:
+        return False
+
+def update_user_display_name(username, display_name):
+    """Update the display name for a user."""
+    if svc is None: return
+    try:
+        recs = svc["users"].get_all_records()
+        for i, r in enumerate(recs):
+            if str(r.get("username","")).strip() == username:
+                svc["users"].update_cell(i + 2, 5, display_name)
+                return
+    except Exception:
+        pass
+
+
 # ═══════════════════════════════════════════════════════════════
 # GOOGLE DRIVE HELPERS
 # ═══════════════════════════════════════════════════════════════
@@ -606,11 +667,13 @@ def is_admin(role):
 
 if "authenticated" not in st.session_state:
     st.session_state.update({"authenticated": False, "user_role": None,
-                              "client_association": None, "username": None})
+                              "client_association": None, "username": None,
+                              "display_name": None})
 
 def handle_logout():
     st.session_state.update({"authenticated": False, "user_role": None,
-                              "client_association": None, "username": None})
+                              "client_association": None, "username": None,
+                              "display_name": None})
     st.rerun()
 
 
@@ -632,8 +695,13 @@ if not st.session_state.authenticated:
             users = svc["users"].get_all_records() if svc else []
             match = next((r for r in users if str(r.get("username","")).strip()==u and str(r.get("password","")).strip()==p and u), None)
             if match:
-                st.session_state.update({"authenticated": True, "username": match.get("username"),
-                                         "user_role": match.get("role"), "client_association": match.get("client_association")})
+                st.session_state.update({
+                    "authenticated": True,
+                    "username":     match.get("username"),
+                    "user_role":    match.get("role"),
+                    "client_association": match.get("client_association"),
+                    "display_name": str(match.get("display_name","")).strip(),
+                })
                 st.rerun()
             else:
                 st.error("Invalid username or password.")
@@ -672,6 +740,25 @@ else:
         search_q = st.sidebar.text_input("Search", placeholder="Tasks, clients, notes…", key="global_search", label_visibility="collapsed")
         if search_q:
             st.sidebar.caption("Searching across all records…")
+
+        # ── Firm Settings (sidebar) ──
+        with st.sidebar.expander("Firm Settings", expanded=False):
+            _cur_display = st.session_state.get("display_name","") or st.session_state.get("username","")
+            _new_display = st.text_input("Your Display Name", value=_cur_display, key="sidebar_display_name",
+                                          placeholder="e.g. Kay")
+            if st.button("Save Name", key="save_display_name"):
+                update_user_display_name(st.session_state.username, _new_display.strip())
+                st.session_state["display_name"] = _new_display.strip()
+                st.success("Name updated!")
+
+            _firm_name  = st.text_input("Firm Name",  value=get_firm_setting("firm_name","Clearly Better Books"), key="sf_name")
+            _firm_email = st.text_input("Firm Email", value=get_firm_setting("firm_email",""), key="sf_email")
+            _hourly_rate= st.text_input("Default Hourly Rate ($)", value=get_firm_setting("hourly_rate",""), key="sf_rate")
+            if st.button("Save Firm Info", key="save_firm_info"):
+                set_firm_setting("firm_name",  _firm_name.strip())
+                set_firm_setting("firm_email", _firm_email.strip())
+                set_firm_setting("hourly_rate",_hourly_rate.strip())
+                st.success("Firm info saved!")
 
     st.sidebar.markdown("<br>", unsafe_allow_html=True)
     if st.sidebar.button("Log Out of Portal", key="logout_btn"):
@@ -852,7 +939,7 @@ else:
         # ── TODAY'S FOCUS PANEL ──
         hour     = datetime.now().hour
         greeting = "Good morning" if hour < 12 else ("Good afternoon" if hour < 17 else "Good evening")
-        uname    = st.session_state.username or "Kay"
+        uname    = st.session_state.get("display_name","").strip() or st.session_state.get("username","Kay")
         day_str  = today.strftime("%A, %B %-d, %Y")
         due_today= [t for t in all_tasks if str(t.get("due","")).strip()==str(today) and str(t.get("status","")).strip()!="Completed"]
 
@@ -921,6 +1008,16 @@ else:
         # ──────────────────────────────────────────────────────
         with tab_tasks:
             st.markdown("#### All Tasks")
+
+            # Due Today strip
+            due_today_tasks = [t for t in all_tasks if str(t.get("due","")).strip()==str(today) and str(t.get("status","")).strip()!="Completed"]
+            if due_today_tasks:
+                st.markdown(
+                    f"<div style='background:#FFF9F5;border:1px solid #F0D4B0;border-left:3px solid #D4956A;border-radius:4px;padding:10px 16px;margin-bottom:16px;'>"
+                    f"<span style='font-family:Montserrat,sans-serif;font-size:0.7em;text-transform:uppercase;letter-spacing:0.1em;color:#D4956A;font-weight:700;'>Due Today — {len(due_today_tasks)} task(s)</span><br>"
+                    + "  &nbsp;·&nbsp;  ".join(f"<strong>{str(t.get('task','')) or '(Untitled)'}</strong> <span style='color:#A8B5A3;font-size:0.85em;'>({t.get('client','')})</span>" for t in due_today_tasks[:5])
+                    + f"</div>",
+                    unsafe_allow_html=True)
 
             # Workflow launcher
             with st.expander("Launch Workflow Template", expanded=False):
@@ -1072,6 +1169,20 @@ else:
         # ──────────────────────────────────────────────────────
         with tab_ar:
             st.markdown("#### Accounts Receivable — All Clients")
+
+            # Bulk reminder option
+            overdue_cli = [c for c in CLIENT_LIST if any(
+                (today - datetime.strptime(str(i.get("due_date","")),"%Y-%m-%d").date()).days > 0
+                for i in all_invoices if i.get("client")==c and str(i.get("status","")).lower()!="paid"
+                and str(i.get("due_date","")).strip()
+            )]
+            if overdue_cli:
+                st.markdown(
+                    f"<div style='background:#FAF2F1;border:1px solid #EBC6C1;border-radius:4px;padding:10px 16px;margin-bottom:16px;'>"
+                    f"<span style='font-family:Montserrat,sans-serif;font-size:0.7em;text-transform:uppercase;letter-spacing:0.1em;color:#C4878A;font-weight:700;'>Overdue AR — {len(overdue_cli)} client(s)</span><br>"
+                    f"<span style='font-family:Lato,sans-serif;font-size:0.88em;color:#555;'>{', '.join(overdue_cli[:5])}</span></div>",
+                    unsafe_allow_html=True)
+
             st.markdown("<br>", unsafe_allow_html=True)
 
             for client in CLIENT_LIST:
@@ -1231,6 +1342,23 @@ else:
                     with ec3: st.markdown(f"**{entry.get('Hours','')}h**")
                     with ec4: st.caption(f"{entry.get('Date','')}  {entry.get('Notes','')}")
                     st.markdown("<hr style='border:none;border-top:1px solid #F0ECE7;margin:4px 0;'>", unsafe_allow_html=True)
+
+            st.markdown("<hr class='section-divider'>", unsafe_allow_html=True)
+            st.markdown("#### Capacity Overview — This Month")
+            target_hrs = float(get_firm_setting("monthly_hours_target","160") or 160)
+            t1, t2 = st.columns([3,1])
+            with t1:
+                st.progress(min(1.0, hours_this_month / target_hrs),
+                            text=f"{hours_this_month:.1f}h logged of {target_hrs:.0f}h target ({int(hours_this_month/target_hrs*100)}%)")
+            with t2:
+                new_target = st.number_input("Monthly Target (hrs)", value=int(target_hrs), min_value=1, max_value=300, step=10, key="hrs_target")
+                if new_target != int(target_hrs):
+                    set_firm_setting("monthly_hours_target", str(new_target))
+
+            # Hours by client this month (bar chart)
+            if cli_sum:
+                df_cap = pd.DataFrame([{"Client": k[:20], "Hours": round(v,1)} for k,v in sorted(cli_sum.items(), key=lambda x:-x[1])])
+                st.bar_chart(df_cap.set_index("Client"))
 
         # ──────────────────────────────────────────────────────
         # TAB: MONTH CLOSE TRACKER
@@ -1591,6 +1719,102 @@ else:
                     if new_note != st.session_state[nk]:
                         st.session_state[nk] = new_note
                         update_client_col(client,"Internal Notes",new_note)
+
+                    st.markdown("<hr class='section-divider'>", unsafe_allow_html=True)
+
+                    # Profile Completeness
+                    pct, filled, total = profile_completeness(rec)
+                    st.markdown(f"**Profile Completeness — {pct}% ({filled}/{total} fields)**")
+                    st.progress(pct / 100)
+                    missing = [f for f in ["Contact Name","Email","Phone","Service Tier","Monthly Rate","Contract Signed","Engagement Start","Referral Source"] if not str(rec.get(f,"")).strip()]
+                    if missing:
+                        st.caption("Missing: " + ", ".join(missing))
+
+                    st.markdown("<hr class='section-divider'>", unsafe_allow_html=True)
+
+                    # Client Portal Invite
+                    with st.expander("Generate Portal Invite (Create Client Login)", expanded=False):
+                        inv_email = str(rec.get("Email","")).strip()
+                        inv1, inv2 = st.columns(2)
+                        with inv1:
+                            inv_username = st.text_input("Portal Username", value=inv_email, key=f"inv_user_{client}")
+                        with inv2:
+                            import secrets as _sec
+                            inv_password = st.text_input("Temporary Password",
+                                                          value=st.session_state.get(f"inv_pw_{client}", _sec.token_hex(4)),
+                                                          key=f"inv_pw_input_{client}")
+
+                        if st.button("Create Portal Login", key=f"inv_create_{client}"):
+                            if inv_username.strip():
+                                ok = add_portal_user(inv_username.strip(), inv_password.strip(), "client", client, client)
+                                if ok:
+                                    st.session_state[f"inv_created_{client}"] = (inv_username.strip(), inv_password.strip())
+                                    st.success(f"Portal login created for {client}.")
+                                else:
+                                    st.error("Could not create login. Check Google Sheets connection.")
+
+                        if f"inv_created_{client}" in st.session_state:
+                            inv_u, inv_p = st.session_state[f"inv_created_{client}"]
+                            firm_name  = get_firm_setting("firm_name","Clearly Better Books")
+                            portal_url = "https://clearly-better-clients.streamlit.app"
+                            invite_msg = (
+                                f"Hi {str(rec.get('Contact Name','')) or client},\n\n"
+                                f"Your {firm_name} client portal is ready! You can log in to view your tasks, "
+                                f"upload documents, send messages, and check your invoices.\n\n"
+                                f"Portal: {portal_url}\n"
+                                f"Username: {inv_u}\n"
+                                f"Password: {inv_p}\n\n"
+                                f"Please change your password after your first login by letting me know "
+                                f"a new one and I'll update it for you.\n\n"
+                                f"Best,\nKay | {firm_name}"
+                            )
+                            st.markdown(f"<div class='ai-label'>Portal Invite Email</div><div class='ai-box'>{invite_msg}</div>", unsafe_allow_html=True)
+                            if inv_email:
+                                gmail = gmail_compose_url(inv_email, f"Your {firm_name} Client Portal is Ready", invite_msg)
+                                st.markdown(f"<a href='{gmail}' target='_blank' class='link-btn'>Open in Gmail</a>", unsafe_allow_html=True)
+
+                    # AI Monthly Report Generator
+                    with st.expander("Generate Monthly Client Report (AI)", expanded=False):
+                        rep_month = st.selectbox("Report Month",
+                            [(today.replace(day=1) - timedelta(days=30*i)).strftime("%B %Y") for i in range(6)],
+                            key=f"rep_month_{client}")
+                        rep_months_ago = [(today.replace(day=1) - timedelta(days=30*i)).strftime("%Y-%m") for i in range(6)]
+                        sel_month_str  = rep_months_ago[[(today.replace(day=1) - timedelta(days=30*i)).strftime("%B %Y") for i in range(6)].index(rep_month)]
+
+                        # Gather data for the report
+                        cli_tasks_done = [t for t in all_tasks if t.get("client")==client and str(t.get("status",""))=="Completed"]
+                        cli_hours_mo   = sum(float(str(t.get("Hours",0)) or 0) for t in all_timelog if t.get("Client")==client and str(t.get("Date","")).startswith(sel_month_str))
+                        cli_inv_mo     = [i for i in all_invoices if i.get("client")==client and str(i.get("due_date","")).startswith(sel_month_str)]
+                        cli_service    = str(rec.get("Service Tier","")) or "bookkeeping services"
+
+                        if st.button("Generate Report", key=f"rep_gen_{client}"):
+                            prompt = (
+                                f"Write a professional monthly summary email from a bookkeeper to their client.\n\n"
+                                f"Bookkeeper: Kay (Clearly Better Books)\n"
+                                f"Client: {client}\n"
+                                f"Service: {cli_service}\n"
+                                f"Month: {rep_month}\n"
+                                f"Tasks completed: {len(cli_tasks_done)}\n"
+                                f"Hours logged: {cli_hours_mo:.1f}h\n"
+                                f"Invoices this month: {len(cli_inv_mo)}\n\n"
+                                f"Write a warm, professional 3-paragraph monthly recap covering:\n"
+                                f"1. What was accomplished this month\n"
+                                f"2. Key items to note or action items for the client\n"
+                                f"3. What's coming next month\n\n"
+                                f"Keep it friendly, concise, and non-jargon-heavy. Sign off as 'Kay | Clearly Better Books'."
+                            )
+                            report, err = ai_complete(prompt)
+                            if report:
+                                st.session_state[f"rep_result_{client}"] = report
+                            elif err:
+                                st.warning(err)
+
+                        if f"rep_result_{client}" in st.session_state:
+                            st.text_area("Monthly Report", value=st.session_state[f"rep_result_{client}"], height=250, key=f"rep_txt_{client}")
+                            cli_email_rep = str(rec.get("Email","")).strip()
+                            if cli_email_rep:
+                                gmail = gmail_compose_url(cli_email_rep, f"{rep_month} Bookkeeping Summary — Clearly Better Books", st.session_state[f"rep_result_{client}"])
+                                st.markdown(f"<a href='{gmail}' target='_blank' class='link-btn'>Open in Gmail</a>", unsafe_allow_html=True)
 
         # ──────────────────────────────────────────────────────
         # TAB: ACTIVITY LOG
